@@ -54,7 +54,7 @@ CAT_COLORS = {
     "Composite": "#A93226",
 }
 
-DB_PATH = "MatSelect_Database_v1.xlsx"
+DB_PATH = "/home/claude/MatSelect_Database_v1.xlsx"
 
 
 # ══════════════════════════════════════════════
@@ -183,21 +183,280 @@ def score_and_rank(df, weights: dict):
 # ══════════════════════════════════════════════
 # 4. PERFORMANCE INDEX CALCULATOR
 # ══════════════════════════════════════════════
-def calc_performance_indices(df):
+# 4A. LOADING CASE LIBRARY
+# ══════════════════════════════════════════════
+
+LOADING_CASES = {
+    "tie_tension": {
+        "label":       "Tie / Rod — Axial Tension",
+        "description": "A slender member loaded in pure tension (e.g. cable, bolt, truss member). "
+                       "Minimize weight for a given axial load.",
+        "objective":   "Minimize mass for given axial stiffness & strength",
+        "pi_name":     "M = σf / ρ",
+        "pi_formula":  "UTS / ρ",
+        "pi_unit":     "MPa·cm³/g",
+        "x_axis":      "density",
+        "y_axis":      "uts",
+        "x_label":     "Density ρ (g/cm³)",
+        "y_label":     "Tensile Strength σf (MPa)",
+        "slope_label": "σf / ρ = C",
+        "slope":       1.0,
+        "typical_apps": "Suspension cables, aircraft skin panels, bolts, tie rods",
+        "ranking_weight": "strength",
+    },
+    "beam_bending": {
+        "label":       "Beam — Bending Load",
+        "description": "A beam loaded in bending (e.g. structural beam, aircraft wing spar, shelf). "
+                       "Minimize weight for a given bending stiffness.",
+        "objective":   "Minimize mass for given bending stiffness",
+        "pi_name":     "M = σf^(2/3) / ρ",
+        "pi_formula":  "UTS^(2/3) / ρ",
+        "pi_unit":     "MPa^(2/3)·cm³/g",
+        "x_axis":      "density",
+        "y_axis":      "uts",
+        "x_label":     "Density ρ (g/cm³)",
+        "y_label":     "Tensile Strength σf (MPa)",
+        "slope_label": "σf^(2/3) / ρ = C",
+        "slope":       3/2,
+        "typical_apps": "Floor joists, wing spars, bicycle frames, shelf brackets",
+        "ranking_weight": "strength",
+    },
+    "panel_bending": {
+        "label":       "Panel / Plate — Bending Load",
+        "description": "A flat panel loaded in bending (e.g. car hood, aircraft fuselage skin, floor panel). "
+                       "Minimize weight for given panel bending stiffness.",
+        "objective":   "Minimize mass for given panel bending stiffness",
+        "pi_name":     "M = σf^(1/2) / ρ",
+        "pi_formula":  "UTS^(1/2) / ρ",
+        "pi_unit":     "MPa^(1/2)·cm³/g",
+        "x_axis":      "density",
+        "y_axis":      "uts",
+        "x_label":     "Density ρ (g/cm³)",
+        "y_label":     "Tensile Strength σf (MPa)",
+        "slope_label": "σf^(1/2) / ρ = C",
+        "slope":       2.0,
+        "typical_apps": "Car body panels, aircraft fuselage skins, ship hulls, floor plates",
+        "ranking_weight": "strength",
+    },
+    "column_buckling": {
+        "label":       "Column — Buckling (Compression)",
+        "description": "A slender column under compressive load that may buckle (e.g. strut, table leg, "
+                       "aircraft rib). Minimize weight for a given buckling load.",
+        "objective":   "Minimize mass for given buckling load",
+        "pi_name":     "M = E^(1/2) / ρ",
+        "pi_formula":  "E^(1/2) / ρ",
+        "pi_unit":     "GPa^(1/2)·cm³/g",
+        "x_axis":      "density",
+        "y_axis":      "E",
+        "x_label":     "Density ρ (g/cm³)",
+        "y_label":     "Young's Modulus E (GPa)",
+        "slope_label": "E^(1/2) / ρ = C",
+        "slope":       2.0,
+        "typical_apps": "Aerospace struts, table legs, bicycle forks, column structures",
+        "ranking_weight": "stiffness",
+    },
+    "stiff_panel_buckling": {
+        "label":       "Stiff Panel — Buckling (Plate)",
+        "description": "A wide flat panel under in-plane compression that may buckle "
+                       "(e.g. aircraft wing skin, ship deck). Minimize weight for given buckling resistance.",
+        "objective":   "Minimize mass for given plate buckling load",
+        "pi_name":     "M = E^(1/3) / ρ",
+        "pi_formula":  "E^(1/3) / ρ",
+        "pi_unit":     "GPa^(1/3)·cm³/g",
+        "x_axis":      "density",
+        "y_axis":      "E",
+        "x_label":     "Density ρ (g/cm³)",
+        "y_label":     "Young's Modulus E (GPa)",
+        "slope_label": "E^(1/3) / ρ = C",
+        "slope":       3.0,
+        "typical_apps": "Aircraft wing skins, ship decks, sandwich panel faces",
+        "ranking_weight": "stiffness",
+    },
+    "spring_elastic": {
+        "label":       "Spring — Elastic Energy Storage",
+        "description": "A component that stores and releases elastic energy (e.g. spring, flexure, "
+                       "snap-fit). Maximize elastic energy stored per unit volume.",
+        "objective":   "Maximize elastic energy stored per unit mass",
+        "pi_name":     "M = σf² / (E·ρ)",
+        "pi_formula":  "UTS² / (E × ρ)",
+        "pi_unit":     "MPa²/(GPa·g/cm³)",
+        "x_axis":      "E",
+        "y_axis":      "uts",
+        "x_label":     "Young's Modulus E (GPa)",
+        "y_label":     "Tensile Strength σf (MPa)",
+        "slope_label": "σf² / E = C",
+        "slope":       1.0,
+        "typical_apps": "Leaf springs, coil springs, snap-fits, flexures, clips",
+        "ranking_weight": "ductility",
+    },
+    "thermal_shock": {
+        "label":       "Thermal Shock Resistance",
+        "description": "A component subjected to sudden temperature changes (e.g. furnace lining, "
+                       "engine component, cookware). Maximize resistance to thermal cracking.",
+        "objective":   "Maximize thermal shock resistance",
+        "pi_name":     "M = σf / (E·α)",
+        "pi_formula":  "UTS / (E × CTE)",
+        "pi_unit":     "MPa/(GPa·µm/m°C)",
+        "x_axis":      "E",
+        "y_axis":      "uts",
+        "x_label":     "Young's Modulus E (GPa)",
+        "y_label":     "Tensile Strength σf (MPa)",
+        "slope_label": "σf / (E·α) = C",
+        "slope":       1.0,
+        "typical_apps": "Furnace linings, engine pistons, cookware, refractory components",
+        "ranking_weight": "high_temp",
+    },
+    "wear_resistance": {
+        "label":       "Wear / Abrasion Resistance",
+        "description": "A surface subjected to sliding contact or abrasion (e.g. bearing, cutting tool, "
+                       "gear tooth, brake pad). Maximize hardness for wear resistance.",
+        "objective":   "Maximize hardness for wear resistance",
+        "pi_name":     "M = H (Hardness)",
+        "pi_formula":  "Hardness (HV)",
+        "pi_unit":     "HV",
+        "x_axis":      "density",
+        "y_axis":      "hardness",
+        "x_label":     "Density ρ (g/cm³)",
+        "y_label":     "Hardness (HV)",
+        "slope_label": "H = C",
+        "slope":       1.0,
+        "typical_apps": "Cutting tools, gears, bearings, brake pads, grinding media",
+        "ranking_weight": "strength",
+    },
+    "fatigue_cyclic": {
+        "label":       "Fatigue — Cyclic Loading",
+        "description": "A component subjected to repeated cyclic loading (e.g. connecting rod, "
+                       "aircraft wing, rotating shaft). Materials with high UTS generally have "
+                       "better fatigue endurance (endurance limit ≈ 0.4–0.5 × UTS for metals).",
+        "objective":   "Maximize fatigue endurance per unit weight",
+        "pi_name":     "M ≈ 0.45·σf / ρ",
+        "pi_formula":  "0.45 × UTS / ρ",
+        "pi_unit":     "MPa·cm³/g",
+        "x_axis":      "density",
+        "y_axis":      "uts",
+        "x_label":     "Density ρ (g/cm³)",
+        "y_label":     "Tensile Strength σf (MPa) — proxy for endurance limit",
+        "slope_label": "σf / ρ = C",
+        "slope":       1.0,
+        "typical_apps": "Connecting rods, aircraft wings, rotating shafts, bicycle cranks",
+        "ranking_weight": "strength",
+    },
+    "pressure_vessel": {
+        "label":       "Pressure Vessel — Internal Pressure",
+        "description": "A thin-walled vessel containing internal pressure (e.g. gas cylinder, "
+                       "hydraulic line, boiler). Minimize weight for a given pressure and volume.",
+        "objective":   "Minimize mass of vessel wall for given pressure",
+        "pi_name":     "M = σf / ρ",
+        "pi_formula":  "UTS / ρ",
+        "pi_unit":     "MPa·cm³/g",
+        "x_axis":      "density",
+        "y_axis":      "uts",
+        "x_label":     "Density ρ (g/cm³)",
+        "y_label":     "Tensile Strength σf (MPa)",
+        "slope_label": "σf / ρ = C",
+        "slope":       1.0,
+        "typical_apps": "Gas cylinders, hydraulic accumulators, boilers, fuel tanks",
+        "ranking_weight": "strength",
+    },
+}
+
+
+def calc_performance_indices(df, loading_case_key=None):
     """
-    Adds common Ashby performance indices as new columns.
+    Calculates ALL standard Ashby performance indices.
+    If loading_case_key is given, also computes the PRIMARY index
+    for that specific loading case and adds it as 'PI_PRIMARY'.
     """
     d = df.copy()
     uts = d[COL["uts"]].fillna(0)
     ys  = d[COL["ys"]].fillna(0)
-    E   = d[COL["E"]].fillna(0)
+    E   = d[COL["E"]].fillna(0).replace(0, np.nan)
     rho = d[COL["density"]].replace(0, np.nan)
+    cte = d[COL["cte"]].fillna(0).replace(0, np.nan)
+    hv  = d[COL["hardness"]].fillna(0)
 
-    d["PI: UTS/ρ (Specific Strength)"]    = (uts / rho).round(1)
-    d["PI: E/ρ (Specific Stiffness)"]     = (E / rho).round(2)
-    d["PI: UTS^(2/3)/ρ (Beam Lightness)"] = ((uts ** (2/3)) / rho).round(2)
-    d["PI: E^(1/2)/ρ (Plate Stiffness)"]  = ((E ** 0.5) / rho).round(3)
+    # ── Standard indices (always calculated) ──
+    d["PI: σf/ρ — Specific Strength (Tie)"]          = (uts / rho).round(2)
+    d["PI: E/ρ — Specific Stiffness"]                = (E / rho).round(3)
+    d["PI: σf^(2/3)/ρ — Beam in Bending"]            = ((uts ** (2/3)) / rho).round(3)
+    d["PI: σf^(1/2)/ρ — Panel in Bending"]           = ((uts ** 0.5) / rho).round(3)
+    d["PI: E^(1/2)/ρ — Column Buckling"]             = ((E ** 0.5) / rho).round(4)
+    d["PI: E^(1/3)/ρ — Plate Buckling"]              = ((E ** (1/3)) / rho).round(4)
+    d["PI: σf²/(E·ρ) — Spring / Energy Storage"]     = ((uts ** 2) / (E * rho)).round(3)
+    d["PI: σf/(E·α) — Thermal Shock Resistance"]     = (uts / (E * cte)).round(4)
+    d["PI: 0.45·σf/ρ — Fatigue Endurance (approx)"] = (0.45 * uts / rho).round(2)
+    d["PI: HV — Wear / Hardness"]                    = hv.round(0)
+
+    # ── Primary index for selected loading case ──
+    if loading_case_key and loading_case_key in LOADING_CASES:
+        lc = LOADING_CASES[loading_case_key]
+        formula = lc["pi_formula"]
+
+        if formula == "UTS / ρ":
+            primary = uts / rho
+        elif formula == "UTS^(2/3) / ρ":
+            primary = (uts ** (2/3)) / rho
+        elif formula == "UTS^(1/2) / ρ":
+            primary = (uts ** 0.5) / rho
+        elif formula == "E^(1/2) / ρ":
+            primary = (E ** 0.5) / rho
+        elif formula == "E^(1/3) / ρ":
+            primary = (E ** (1/3)) / rho
+        elif formula == "UTS² / (E × ρ)":
+            primary = (uts ** 2) / (E * rho)
+        elif formula == "UTS / (E × CTE)":
+            primary = uts / (E * cte)
+        elif formula == "0.45 × UTS / ρ":
+            primary = 0.45 * uts / rho
+        elif formula == "Hardness (HV)":
+            primary = hv.astype(float)
+        else:
+            primary = uts / rho
+
+        d["PI_PRIMARY"] = primary.round(4)
+        d["PI_PRIMARY_NAME"] = lc["pi_name"]
+        d["PI_PRIMARY_UNIT"] = lc["pi_unit"]
+
     return d
+
+
+def rank_by_loading_case(df, loading_case_key, base_weights=None):
+    """
+    Re-ranks materials with the loading case primary PI
+    injected as the dominant scoring criterion.
+    """
+    if loading_case_key not in LOADING_CASES:
+        return score_and_rank(df, base_weights or {})
+
+    lc = LOADING_CASES[loading_case_key]
+
+    # Start from base weights, boost the loading-case-relevant property
+    weights = {
+        "lightness":       3,
+        "strength":        3,
+        "stiffness":       3,
+        "corrosion":       2,
+        "cost_efficiency": 2,
+        "ductility":       1,
+        "high_temp":       1,
+        "electrical":      0,
+    }
+    if base_weights:
+        weights.update(base_weights)
+
+    # Dominate ranking with primary PI
+    dominant = lc["ranking_weight"]
+    weights[dominant] = 10  # override to make PI the primary driver
+
+    ranked = score_and_rank(df, weights)
+
+    # Also compute PI values and sort by primary PI within same score tier
+    ranked = calc_performance_indices(ranked, loading_case_key)
+    if "PI_PRIMARY" in ranked.columns:
+        ranked = ranked.sort_values("PI_PRIMARY", ascending=False).reset_index(drop=True)
+        ranked["Rank"] = range(1, len(ranked) + 1)
+
+    return ranked
 
 
 # ══════════════════════════════════════════════
@@ -375,7 +634,7 @@ if __name__ == "__main__":
         y_label="Tensile Strength (MPa)",
         title="Ashby Chart: Strength vs Density\n(Drone Frame Case Study)",
         highlight_ids=top_ids,
-        save_path="ashby_strength_density.png"
+        save_path="/home/claude/ashby_strength_density.png"
     )
 
     ashby_chart(
@@ -385,7 +644,7 @@ if __name__ == "__main__":
         y_label="Young's Modulus (GPa)",
         title="Ashby Chart: Stiffness vs Density\n(Drone Frame Case Study)",
         highlight_ids=top_ids,
-        save_path="ashby_stiffness_density.png"
+        save_path="/home/claude/ashby_stiffness_density.png"
     )
 
     print("\n  ✅ Stage 2 Complete.")
