@@ -54,7 +54,7 @@ CAT_COLORS = {
     "Composite": "#A93226",
 }
 
-DB_PATH = "/home/claude/MatSelect_Database_v1.xlsx"
+DB_PATH = "MatSelect_Database_v1.xlsx"
 
 
 # ══════════════════════════════════════════════
